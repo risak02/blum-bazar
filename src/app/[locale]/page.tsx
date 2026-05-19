@@ -18,9 +18,9 @@ export default async function Page(_: PageProps<"/[locale]">) {
     // šedé pozadi
     //box 1. celé pozadí
     <Box bg="gray.0" style={{ minHeight: "100vh", width: "100%" }}>
-      {/* stack 1. cela stranka - udrzuje vsechno zarovnonane */}
+      {/* stack 1. cela stranka - udrzuje vsechno zarovnonane pod sebou */}
       <Stack gap="md" style={{ maxWidth: 1200, margin: "0 auto", padding: "40px 24px" }}>
-        {/*  group 1. nahore(nazev a tlacitko vpravo)*/}
+        {/*  group 1. nahore(nazev a tlacitko vpravo)- zarovna vedle sebe*/}
         <Group justify="space-between" align="flex-start">
           {/* stack 2. nahore*/}
           <Stack gap="xs" style={{ flex: 1 }}>
