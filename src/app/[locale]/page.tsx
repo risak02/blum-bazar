@@ -1,4 +1,4 @@
-"use client"; // Důležité pro interaktivní filtry, přepínače a Modal
+"use client";
 
 import {
   Box,
@@ -18,20 +18,75 @@ import {
   Title,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
-import { Search } from "lucide-react"; // Ikonka lupy do vyhledávače
-import { useState } from "react";
+import { Search } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { createBazarItem, fetchBazarItems } from "./actions";
+
+interface BazarItem {
+  id: string;
+  title: string;
+  description: string | null;
+  category: string;
+  price: number | null;
+  isFree: boolean | null;
+  contactName: string;
+  contactEmail: string | null;
+  status: string | null;
+  imageUrl: string | null;
+  createdAt: string;
+}
 
 export default function Page() {
-  // Hook z Mantine pro otevírání a zavírání vyskakovacího okna
   const [opened, { open, close }] = useDisclosure(false);
+
+  // --- STAVY PRO DATA Z DATABÁZE ---
+  const [dbItems, setDbItems] = useState<BazarItem[]>([]);
+  const [loading, setLoading] = useState(false);
 
   // --- STAVY PRO FILTRACI ---
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const [priceFilter, setPriceFilter] = useState("all"); // Vše / Zdarma / Placené
+  const [priceFilter, setPriceFilter] = useState("all");
 
-  // --- Horní lišta uvnitř okna (ORANŽOVÁ BUBLINA ZPĚT NALEVO S BÍLÝM PÍSMEM) ---
+  // Obaleno v useCallback, aby byl useEffect stoprocentně stabilní pro linter
+  const loadData = useCallback(async () => {
+    const data = await fetchBazarItems();
+    setDbItems(data as unknown as BazarItem[]);
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setLoading(true);
+
+    const formData = new FormData(event.currentTarget);
+    await createBazarItem(formData);
+
+    await loadData();
+    setLoading(false);
+    close();
+  };
+
+  // REAKTIVNÍ FILTRACE
+  const filteredItems = dbItems.filter((item) => {
+    const matchesSearch =
+      item.title.toLowerCase().includes(search.toLowerCase()) ||
+      (item.description?.toLowerCase() || "").includes(search.toLowerCase());
+
+    const matchesCategory = !category || item.category === category;
+    const matchesStatus = !status || item.status === status;
+
+    let matchesPrice = true;
+    if (priceFilter === "free") matchesPrice = item.isFree === true || item.price === 0;
+    if (priceFilter === "paid") matchesPrice = !item.isFree && (item.price || 0) > 0;
+
+    return matchesSearch && matchesCategory && matchesStatus && matchesPrice;
+  });
+
   const headerLayout = (
     <Group gap="md" mb="xs" align="center">
       <Button
@@ -42,14 +97,9 @@ export default function Page() {
         styles={{
           root: {
             backgroundColor: "#e8590c",
-            "&:hover": {
-              backgroundColor: "#d9480f",
-            },
+            "&:hover": { backgroundColor: "#d9480f" },
           },
-          label: {
-            color: "white",
-            fontWeight: 500,
-          },
+          label: { color: "white", fontWeight: 500 },
         }}
       >
         ← Zpět
@@ -63,7 +113,7 @@ export default function Page() {
   return (
     <Box bg="gray.0" style={{ minHeight: "100vh", width: "100%" }}>
       <Stack gap="md" style={{ maxWidth: 1200, margin: "0 auto", padding: "40px 24px" }}>
-        {/* --- Hlavní hlavička webu --- */}
+        {/* Hlavička */}
         <Group justify="space-between" align="flex-start">
           <Stack gap="xs" style={{ flex: 1 }}>
             <Title order={1} size="h2" fw={700}>
@@ -80,12 +130,10 @@ export default function Page() {
           </Button>
         </Group>
 
-        {/* --- FILTRACE BEZ PŘEKRÝVÁNÍ TEXTŮ --- */}
+        {/* Filtry */}
         <Card withBorder padding="md" radius="md" bg="white">
           <Stack gap="md">
-            {/* První řádek: Hledat, Kategorie, Stav */}
             <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="md">
-              {/* Vyhledávání s lupou */}
               <TextInput
                 placeholder="Hledat nabídku..."
                 value={search}
@@ -94,7 +142,6 @@ export default function Page() {
                 leftSection={<Search size={16} strokeWidth={1.5} color="#adb5bd" />}
               />
 
-              {/* Filtr podle kategorií */}
               <Select
                 placeholder="Kategorie"
                 value={category}
@@ -104,7 +151,6 @@ export default function Page() {
                 radius="md"
               />
 
-              {/* Filtr podle stavu */}
               <Select
                 placeholder="Stav"
                 value={status}
@@ -115,7 +161,6 @@ export default function Page() {
               />
             </SimpleGrid>
 
-            {/* Druhý řádek: Fixnutý přepínač Vše / Zdarma / Placené */}
             <Box style={{ width: "100%" }}>
               <SegmentedControl
                 value={priceFilter}
@@ -129,41 +174,84 @@ export default function Page() {
                   { label: "Placené", value: "paid" },
                 ]}
                 styles={{
-                  root: {
-                    backgroundColor: "#f1f3f5",
-                    padding: "4px", // Větší prostor kolem aktivního prvku, aby neubíral místo textu
-                  },
-                  indicator: {
-                    backgroundColor: "white",
-                    boxShadow: "0 1px 3px rgba(0,0,0,0.1), 0 1px 2px rgba(0,0,0,0.06)",
-                  },
-                  label: {
-                    fontWeight: 500,
-                    paddingTop: "6px",
-                    paddingBottom: "6px", // Bezpečný padding pro text, aby se nepřekrýval s okraji
-                    color: "#495057",
-                  },
-                  control: {
-                    // Odstraní případné podivné border a outline konflikty, které způsobovaly překrytí
-                    border: "none",
-                  },
+                  root: { backgroundColor: "#f1f3f5", padding: "4px" },
+                  indicator: { backgroundColor: "white", boxShadow: "0 1px 3px rgba(0,0,0,0.1)" },
+                  label: { fontWeight: 500, paddingTop: "6px", paddingBottom: "6px", color: "#495057" },
                 }}
               />
             </Box>
           </Stack>
         </Card>
 
-        {/* --- Sekce pro inzeráty (placeholder) --- */}
-        <Card withBorder padding="md" radius="md" bg="white">
-          <Text size="sm" c="dimmed" ta="center">
-            nabídky
-          </Text>
-        </Card>
+        {/* Mřížka inzerátů */}
+        {filteredItems.length === 0 ? (
+          <Card withBorder padding="xl" radius="md" bg="white">
+            <Text size="sm" c="dimmed" ta="center">
+              Žádné nabídky neodpovídají vybraným filtrům.
+            </Text>
+          </Card>
+        ) : (
+          <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="lg">
+            {filteredItems.map((item) => (
+              <Card key={item.id} shadow="sm" padding="lg" radius="md" withBorder bg="white">
+                {item.imageUrl ? (
+                  <Card.Section>
+                    <Box
+                      component="img"
+                      src={item.imageUrl}
+                      alt={item.title}
+                      style={{ height: 180, width: "100%", objectFit: "cover" }}
+                    />
+                  </Card.Section>
+                ) : null}
+
+                <Group justify="space-between" mt="md" mb="xs">
+                  <Text fw={600} size="lg" lineClamp={1}>
+                    {item.title}
+                  </Text>
+                  <Text
+                    size="xs"
+                    fw={700}
+                    px="xs"
+                    py={2}
+                    style={{
+                      borderRadius: "4px",
+                      backgroundColor: item.status === "Dostupné" ? "#ebfbee" : "#fff5f5",
+                      color: item.status === "Dostupné" ? "#2b8a3e" : "#c92a2a",
+                    }}
+                  >
+                    {item.status}
+                  </Text>
+                </Group>
+
+                <Text size="sm" c="dimmed" lineClamp={2} style={{ minHeight: 44 }}>
+                  {item.description || "Bez popisu."}
+                </Text>
+
+                <Text fw={700} size="xl" mt="md" c="orange.8">
+                  {item.isFree ? "Zdarma" : `${item.price?.toLocaleString("cs-CZ")} Kč`}
+                </Text>
+
+                <Box style={{ borderTop: "1px solid #f1f3f5", paddingTop: "10px" }} mt="md">
+                  <Text size="xs" c="dimmed">
+                    Kontakt: <b>{item.contactName}</b>
+                  </Text>
+                  {item.contactEmail && (
+                    <Text size="xs" c="dimmed">
+                      E-mail: {item.contactEmail}
+                    </Text>
+                  )}
+                  <Text size="xs" c="gray.5" mt={4}>
+                    Kategorie: {item.category}
+                  </Text>
+                </Box>
+              </Card>
+            ))}
+          </SimpleGrid>
+        )}
       </Stack>
 
-      {/* ========================================================= */}
-      {/* ==================== VYSKAKOVACÍ MODAL =================== */}
-      {/* ========================================================= */}
+      {/* Modal s formulářem */}
       <Modal
         opened={opened}
         onClose={close}
@@ -174,63 +262,64 @@ export default function Page() {
         withCloseButton={false}
         overlayProps={{ backgroundOpacity: 0.4, blur: 3 }}
       >
-        {/* --- Samotný formulář laděný do oranžova --- */}
-        <Stack gap="md">
-          <TextInput label="Název věci *" placeholder="Např. Konferenční stolek" required radius="md" />
+        <form onSubmit={handleSubmit}>
+          <Stack gap="md">
+            <TextInput label="Název věci *" name="title" placeholder="Např. Konferenční stolek" required radius="md" />
 
-          <Textarea
-            label="Popis"
-            placeholder="Popiš stav, rozměry, místo předání..."
-            minRows={3}
-            autosize
-            radius="md"
-          />
-
-          <Select
-            label="Kategorie *"
-            placeholder="Vyber kategorii"
-            data={["ELEKTRONIKA", "DĚTSKÉ VĚCI", "KNIHY", "NÁBYTEK", "OSTATNÍ"]}
-            required
-            radius="md"
-          />
-
-          <Group align="flex-end">
-            <NumberInput
-              label="Cena"
-              defaultValue={0}
-              suffix=" Kč"
-              thousandSeparator=" "
-              placeholder="0 Kč"
+            <Textarea
+              label="Popis"
+              name="description"
+              placeholder="Popiš stav, rozměry, místo předání..."
+              minRows={3}
+              autosize
               radius="md"
-              style={{ flex: 1 }}
             />
-            <Checkbox label="Nabídka je zdarma" mb="xs" color="orange" radius="sm" />
-          </Group>
 
-          <SimpleGrid cols={2} spacing="md">
-            <TextInput label="Jméno kontaktu *" placeholder="Tvé jméno" required radius="md" />
-            <TextInput label="E-mail" placeholder="jmeno@example.com" type="email" radius="md" />
-          </SimpleGrid>
+            <Select
+              label="Kategorie *"
+              name="category"
+              placeholder="Vyber kategorii"
+              data={["ELEKTRONIKA", "DĚTSKÉ VĚCI", "KNIHY", "NÁBYTEK", "OSTATNÍ"]}
+              required
+              radius="md"
+            />
 
-          <Select
-            label="Stav nabídky"
-            defaultValue="Dostupné"
-            data={["Dostupné", "Rezervováno", "Prodáno"]}
-            radius="md"
-          />
+            <Group align="flex-end">
+              <NumberInput
+                label="Cena"
+                name="price"
+                defaultValue={0}
+                suffix=" Kč"
+                thousandSeparator=" "
+                placeholder="0 Kč"
+                radius="md"
+                style={{ flex: 1 }}
+              />
+              <Checkbox label="Nabídka je zdarma" name="isFree" value="true" mb="xs" color="orange" radius="sm" />
+            </Group>
 
-          <TextInput label="URL obrázku (volitelné)" placeholder="https://..." radius="md" />
+            <SimpleGrid cols={2} spacing="md">
+              <TextInput label="Jméno kontaktu *" name="contactName" placeholder="Tvé jméno" required radius="md" />
+              <TextInput label="E-mail" name="contactEmail" placeholder="jmeno@example.com" type="email" radius="md" />
+            </SimpleGrid>
 
-          <Text c="dimmed" size="xs" mt="xs">
-            Platbu a předání si domluvíš přímo s kupujícím.
-          </Text>
+            <Select
+              label="Stav nabídky"
+              name="status"
+              defaultValue="Dostupné"
+              data={["Dostupné", "Rezervováno", "Prodáno"]}
+              radius="md"
+            />
 
-          <Group justify="flex-end" mt="xl">
-            <Button color="orange" size="md" radius="md" onClick={close}>
-              Přidat nabídku
-            </Button>
-          </Group>
-        </Stack>
+            <TextInput label="URL obrázku (volitelné)" name="imageUrl" placeholder="https://..." radius="md" />
+
+            <Group justify="flex-end" mt="xl">
+              <Button type="submit" color="orange" size="md" radius="md" loading={loading}>
+                Přidat nabídku
+              </Button>
+            </Group>
+          </Stack>
+        </form>
       </Modal>
     </Box>
   );
