@@ -1,2 +1,2 @@
-export * from "./bazar";
+export * from "./bazar.schema";
 export * from "./system-setting.schema";
