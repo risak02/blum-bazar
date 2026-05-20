@@ -15,6 +15,13 @@
       "when": 1778172390529,
       "tag": "0001_seed-is-maintenance-system-setting",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1779261220209,
+      "tag": "0002_lame_whizzer",
+      "breakpoints": true
     }
   ]
 }
