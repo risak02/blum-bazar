@@ -58,8 +58,9 @@ export default function Page() {
   const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState<BazarItem | null>(null);
 
-  // --- STAV PRO SPRÁVNÉ ZACHYCOVÁNÍ CENY Z MANTINE ---
+  // --- STAVY PRO FORMULÁŘ (CENA A ZDARMA) ---
   const [formPrice, setFormPrice] = useState<string | number>(0);
+  const [formIsFree, setFormIsFree] = useState<boolean>(false);
 
   const loadData = useCallback(async () => {
     const data = await fetchBazarItems();
@@ -70,23 +71,42 @@ export default function Page() {
     loadData();
   }, [loadData]);
 
-  // Synchronizace ceny při otevření editace
+  // NEPRŮSTŘELNÉ: Synchronizace reaguje striktně jen na změnu editingItem, což řeší Next.js linter chyby
   useEffect(() => {
     if (editingItem) {
-      setFormPrice(editingItem.price ?? 0);
+      setFormIsFree(editingItem.isFree ?? false);
+      setFormPrice(editingItem.isFree ? 0 : (editingItem.price ?? 0));
     } else {
+      setFormIsFree(false);
       setFormPrice(0);
     }
   }, [editingItem]);
 
+  // Pokud uživatel klikne na "Zdarma", automaticky vynulujeme cenu a zamkneme pole
+  const handleIsFreeChange = (checked: boolean) => {
+    setFormIsFree(checked);
+    if (checked) {
+      setFormPrice(0);
+    }
+  };
+
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setLoading(true);
 
     const formData = new FormData(event.currentTarget);
+    const selectedCategory = formData.get("category");
 
-    // BEZPEČNÉ RUČNÍ VLOŽENÍ CENY: Tímto přepíšeme případný nefunkční Mantine export
-    formData.set("price", formPrice.toString());
+    // Kontrola vyplnění kategorie
+    if (!selectedCategory || selectedCategory.toString().trim() === "") {
+      alert("Prosím, vyber kategorii nabídky.");
+      return;
+    }
+
+    setLoading(true);
+
+    // Správné odeslání ceny a stavu isFree na server
+    formData.set("price", formIsFree ? "0" : formPrice.toString());
+    formData.set("isFree", formIsFree.toString());
 
     await createBazarItem(formData);
 
@@ -94,7 +114,7 @@ export default function Page() {
     setDbItems(freshData);
 
     if (editingItem) {
-      const updated = freshData.find((i) => i.id === editingItem.id);
+      const updated = freshData.find((i) => (i as BazarItem).id === editingItem.id) as BazarItem | undefined;
       if (updated) setSelectedItem(updated);
     }
 
@@ -119,8 +139,8 @@ export default function Page() {
     const freshData = (await fetchBazarItems()) as unknown as BazarItem[];
     setDbItems(freshData);
 
-    // OPRAVENO: Změněno z id === id na i.id === id
-    const updated = freshData.find((i) => i.id === id);
+    // OPRAVENO: Typově bezpečné vyhledání položky porovnáním i.id === id
+    const updated = freshData.find((i) => (i as BazarItem).id === id) as BazarItem | undefined;
     if (updated) setSelectedItem(updated);
 
     setStatusLoading(false);
@@ -134,6 +154,7 @@ export default function Page() {
   const handleCloseForm = () => {
     setEditingItem(null);
     setFormPrice(0);
+    setFormIsFree(false);
     close();
   };
 
@@ -288,7 +309,6 @@ export default function Page() {
                     {item.description || "Bez popisu."}
                   </Text>
 
-                  {/* Bezpečné zobrazení ceny s fallbackem na 0, pokud by tam náhodou byla neplecha */}
                   <Text fw={700} size="xl" mt="md" c="orange.8">
                     {item.isFree ? "Zdarma" : `${(item.price ?? 0).toLocaleString("cs-CZ")} Kč`}
                   </Text>
@@ -493,7 +513,15 @@ export default function Page() {
           {editingItem && <input type="hidden" name="id" value={editingItem.id} />}
 
           <Stack gap="md">
-            <TextInput label="Název věci *" name="title" defaultValue={editingItem?.title || ""} required radius="md" />
+            <TextInput
+              label="Název věci"
+              name="title"
+              defaultValue={editingItem?.title || ""}
+              required
+              withAsterisk
+              radius="md"
+            />
+
             <Textarea
               label="Popis"
               name="description"
@@ -501,21 +529,24 @@ export default function Page() {
               minRows={3}
               radius="md"
             />
+
             <Select
-              label="Kategorie *"
+              label="Kategorie"
               name="category"
               defaultValue={editingItem?.category || null}
               data={["ELEKTRONIKA", "DĚTSKÉ VĚCI", "KNIHY", "NÁBYTEK", "OSTATNÍ"]}
               required
+              withAsterisk
+              allowDeselect={false}
               radius="md"
             />
 
             <Group align="flex-end">
-              {/* Oprava: Řízená komponenta pomocí state formPrice, aby se hodnota neztratila */}
               <NumberInput
                 label="Cena"
                 value={formPrice}
                 onChange={(val) => setFormPrice(val || 0)}
+                disabled={formIsFree} // Deaktivace ceny, pokud je vybráno "Zdarma"
                 suffix=" Kč"
                 thousandSeparator=" "
                 radius="md"
@@ -523,9 +554,8 @@ export default function Page() {
               />
               <Checkbox
                 label="Nabídka je zdarma"
-                name="isFree"
-                value="true"
-                defaultChecked={editingItem?.isFree ?? false}
+                checked={formIsFree}
+                onChange={(event) => handleIsFreeChange(event.currentTarget.checked)}
                 mb="xs"
                 color="orange"
               />
@@ -533,10 +563,11 @@ export default function Page() {
 
             <SimpleGrid cols={2} spacing="md">
               <TextInput
-                label="Jméno kontaktu *"
+                label="Jméno kontaktu"
                 name="contactName"
                 defaultValue={editingItem?.contactName || ""}
                 required
+                withAsterisk
                 radius="md"
               />
               <TextInput
