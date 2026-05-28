@@ -30,6 +30,9 @@ export async function createBazarItem(formData: FormData) {
   const status = (formData.get("status") as string) || "Dostupné";
   const imageUrl = formData.get("imageUrl") as string | null;
 
+  // KLÍČOVÁ OPRAVA: Načtení ID přihlášeného uživatele z FormData, které posíláme z frontend formuláře
+  const userId = formData.get("userId") as string | null;
+
   // Pokud se dynamickým hledáním nepodařilo tabulku v DB schématu najít, vyhodíme chybu
   if (!bazarTable) {
     throw new Error("Nepodařilo se nalézt tabulku bazaru v bazar.schema.ts");
@@ -39,7 +42,7 @@ export async function createBazarItem(formData: FormData) {
   const priceColumnName =
     "price" in bazarTable ? "price" : Object.keys(bazarTable).find((key) => key.toLowerCase().includes("price"));
 
-  // datovy objekt v DB beze ceny
+  // datovy objekt v DB beze ceny a userId
   const dataFields: Record<string, any> = {
     title,
     description,
@@ -56,8 +59,14 @@ export async function createBazarItem(formData: FormData) {
     dataFields[priceColumnName] = isFree ? 0 : price;
   }
 
+  // KLÍČOVÁ OPRAVA: Pokud vytváříme nový inzerát, přidáme userId do databázového zápisu
+  if (userId) {
+    dataFields.userId = userId;
+  }
+
   // ROZHODNUTÍ MEZI ÚPRAVOU A NOVÝM ZÁZNAMEM:
   if (id && id.trim() !== "") {
+    // Při úpravě stávajícího inzerátu userId raději neměníme (bezpečnostní pojistka)
     await db.update(bazarTable).set(dataFields).where(eq(bazarTable.id, id));
   } else {
     await db.insert(bazarTable).values(dataFields);
@@ -66,6 +75,7 @@ export async function createBazarItem(formData: FormData) {
   // Promazání cache pro aktuální cestu ("/")
   revalidatePath("/");
 }
+
 //Načtení všech inzerátů z databáze
 export async function fetchBazarItems() {
   // Ochrana pro případ, že tabulka neexistuje

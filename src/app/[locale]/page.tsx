@@ -24,9 +24,10 @@ import {
 import { useDisclosure } from "@mantine/hooks";
 import { ImageIcon, Info, LogIn, LogOut, Search } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-
-// --- ABSOLUTNÍ IMPORT SERVEROVÝCH AKCÍ (BEZ AUTH IMPORTŮ) ---
+// --- ABSOLUTNÍ IMPORT SERVEROVÝCH AKCÍ ---
 import { createBazarItem, deleteBazarItem, fetchBazarItems, updateBazarItemStatus } from "@/app/[locale]/actions";
+// --- UPRAVENÝ IMPORT BEZPEČNÉHO LOKÁLNÍHO AUTH KLIENTA ---
+import { authClient } from "@/lib/auth-client";
 
 // --- DATOVÝ MODEL (INTERFACE) ---
 interface BazarItem {
@@ -44,19 +45,16 @@ interface BazarItem {
   createdAt: string;
 }
 
-// Struktura uživatele pro čistý stav bez knihovny
-interface MockUser {
-  id: string;
-  name: string;
-  email: string;
-  image?: string | null;
-}
-
 export default function Page() {
-  const [opened, { open, close }] = useDisclosure(false);
+  // Ochrana před Next.js hydration error
+  const [mounted, setMounted] = useState(false);
 
-  // --- STAVY PRO UŽIVATELE A DATA ---
-  const [sessionUser, setSessionUser] = useState<MockUser | null>(null);
+  // Kontrola otevření oken
+  const [opened, { open, close }] = useDisclosure(false);
+  const [authModalOpened, { open: openAuthModal, close: closeAuthModal }] = useDisclosure(false);
+
+  // --- STAVY PRO DATA A AKTIVNÍ RELACI Z BETTER-AUTH ---
+  const { data: session, isPending } = authClient.useSession();
   const [dbItems, setDbItems] = useState<BazarItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -76,42 +74,66 @@ export default function Page() {
   // --- STAVY PRO FORMULÁŘ ---
   const [formPrice, setFormPrice] = useState<string | number>(0);
   const [formIsFree, setFormIsFree] = useState<boolean>(false);
+  // Stav pro e-mail ve formuláři
+  const [formEmail, setFormEmail] = useState<string>("");
 
-  // --- NAČÍTÁNÍ SEZNAMU A UŽIVATELE ZE SERVERU ---
+  // --- NAČÍTÁNÍ DAT ---
   const loadData = useCallback(async () => {
     try {
       const data = await fetchBazarItems();
-      setDbItems(data as unknown as BazarItem[]);
-
-      // Pro simulaci přihlášení, pokud nemáme klienta na frontendu:
-      // Po načtení položek se podíváme, zda existuje inzerát, abychom z něj vzali userId
-      // pro účely testování zobrazení tlačítek "Upravit/Smazat".
-      if (data && data.length > 0) {
-        const firstItem = data[0] as unknown as BazarItem;
-        setSessionUser({
-          id: firstItem.userId, // Nastaví tě jako vlastníka pro testování
-          name: firstItem.contactName || "Přihlášený Uživatel",
-          email: firstItem.contactEmail || "user@blogic.cz",
-        });
-      }
+      setDbItems((data || []) as unknown as BazarItem[]);
     } catch (error) {
       console.error("Chyba při načítání dat z bazaru:", error);
     }
   }, []);
 
   useEffect(() => {
+    setMounted(true);
     loadData();
   }, [loadData]);
 
+  // OPRAVENO: Sledování změn pro správné předvyplnění e-mailu při každém otevření
   useEffect(() => {
-    if (editingItem) {
-      setFormIsFree(editingItem.isFree ?? false);
-      setFormPrice(editingItem.isFree ? 0 : (editingItem.price ?? 0));
-    } else {
-      setFormIsFree(false);
-      setFormPrice(0);
+    if (opened) {
+      if (editingItem) {
+        setFormIsFree(editingItem.isFree ?? false);
+        setFormPrice(editingItem.isFree ? 0 : (editingItem.price ?? 0));
+        setFormEmail(editingItem.contactEmail || "");
+      } else {
+        setFormIsFree(false);
+        setFormPrice(0);
+        // Předvyplnění e-mailu z aktuální session
+        setFormEmail(session?.user?.email || "");
+      }
     }
-  }, [editingItem]);
+  }, [opened, editingItem, session]);
+
+  // --- AKCE PŘIHLÁŠENÍ PŘES GOOGLE ---
+  const handleGoogleSignIn = async () => {
+    try {
+      await authClient.signIn.social({
+        provider: "google",
+        callbackURL: typeof window !== "undefined" ? window.location.href : "/",
+      });
+    } catch (error) {
+      console.error("Chyba při přihlašování přes Google:", error);
+    }
+  };
+
+  // --- AKCE ODHLÁŠENÍ ---
+  const handleSignOut = async () => {
+    try {
+      await authClient.signOut({
+        fetchOptions: {
+          onSuccess: () => {
+            window.location.reload();
+          },
+        },
+      });
+    } catch (error) {
+      console.error("Chyba při odhlašování:", error);
+    }
+  };
 
   const handleIsFreeChange = (checked: boolean) => {
     setFormIsFree(checked);
@@ -120,9 +142,22 @@ export default function Page() {
     }
   };
 
+  const handleAddOfferClick = () => {
+    if (!session?.user) {
+      openAuthModal();
+    } else {
+      open();
+    }
+  };
+
   // --- ODESLÁNÍ FORMULÁŘE ---
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+
+    if (!session?.user) {
+      openAuthModal();
+      return;
+    }
 
     const formData = new FormData(event.currentTarget);
     const selectedCategory = formData.get("category");
@@ -136,10 +171,17 @@ export default function Page() {
     formData.set("price", formIsFree ? "0" : formPrice.toString());
     formData.set("isFree", formIsFree.toString());
 
+    // Pojistka pro disabled políčko: natvrdo vložíme e-mail ze stavu do FormData
+    formData.set("contactEmail", formEmail);
+
+    if (session?.user?.id) {
+      formData.set("userId", session.user.id);
+    }
+
     await createBazarItem(formData);
 
     const freshData = (await fetchBazarItems()) as unknown as BazarItem[];
-    setDbItems(freshData);
+    setDbItems(freshData || []);
 
     if (editingItem) {
       const updated = freshData.find((i) => (i as BazarItem).id === editingItem.id) as BazarItem | undefined;
@@ -167,7 +209,7 @@ export default function Page() {
     await updateBazarItemStatus(id, newStatus);
 
     const freshData = (await fetchBazarItems()) as unknown as BazarItem[];
-    setDbItems(freshData);
+    setDbItems(freshData || []);
 
     const updated = freshData.find((i) => (i as BazarItem).id === id) as BazarItem | undefined;
     if (updated) setSelectedItem(updated);
@@ -184,11 +226,13 @@ export default function Page() {
     setEditingItem(null);
     setFormPrice(0);
     setFormIsFree(false);
+    setFormEmail("");
     close();
   };
 
   // --- FILTROVÁNÍ ---
   const filteredItems = dbItems.filter((item) => {
+    if (!item || !item.title) return false;
     const matchesSearch =
       item.title.toLowerCase().includes(search.toLowerCase()) ||
       (item.description?.toLowerCase() || "").includes(search.toLowerCase());
@@ -214,19 +258,30 @@ export default function Page() {
     </Group>
   );
 
-  // Bezpečné ověření vlastnictví na základě ID
-  const isOwner = sessionUser && selectedItem && sessionUser.id === selectedItem.userId;
+  // --- POJIŠTĚNÁ STRUKTURA VALIDACE VLASTNICTVÍ ---
+  const isIdOwner =
+    session?.user?.id && selectedItem?.userId && String(session.user.id).trim() === String(selectedItem.userId).trim();
+  const isEmailOwner =
+    session?.user?.email &&
+    selectedItem?.contactEmail &&
+    session.user.email.toLowerCase().trim() === selectedItem.contactEmail.toLowerCase().trim();
+
+  const isOwner = isIdOwner || isEmailOwner;
+
+  if (!mounted) {
+    return <Box style={{ width: "100%", minHeight: "100vh" }} bg="#f8f9fa" />;
+  }
 
   return (
     <Box style={{ width: "100%" }}>
       <Stack gap="md" style={{ maxWidth: 1200, margin: "0 auto", padding: "40px 0" }}>
-        {/* HORNÍ LIŠTA S AUTENTIZACÍ (BEZ KNIHOVNY) */}
+        {/* HORNÍ LIŠTA S UŽIVATELEM */}
         <Group justify="flex-end" mb="xs">
-          {sessionUser ? (
+          {session?.user ? (
             <Group gap="sm">
-              <Avatar src={sessionUser.image || undefined} alt={sessionUser.name} radius="xl" />
+              <Avatar src={session.user.image || undefined} alt={session.user.name} radius="xl" />
               <Text size="sm" fw={500}>
-                {sessionUser.name}
+                {session.user.name}
               </Text>
               <Button
                 variant="outline"
@@ -234,7 +289,7 @@ export default function Page() {
                 size="xs"
                 radius="md"
                 leftSection={<LogOut size={14} />}
-                onClick={() => setSessionUser(null)}
+                onClick={handleSignOut}
               >
                 Odhlásit se
               </Button>
@@ -246,10 +301,8 @@ export default function Page() {
               size="sm"
               radius="md"
               leftSection={<LogIn size={16} />}
-              onClick={() => {
-                // Přímé nastavení lokálního mock stavu pro bypass přihlášení
-                setSessionUser({ id: "user-123", name: "Blogic Kolega", email: "kolega@blogic.cz" });
-              }}
+              onClick={openAuthModal}
+              loading={isPending}
             >
               Přihlásit se
             </Button>
@@ -267,7 +320,7 @@ export default function Page() {
             </Text>
           </Stack>
 
-          <Button color="orange" size="md" radius="md" onClick={open}>
+          <Button color="orange" size="md" radius="md" onClick={handleAddOfferClick}>
             + Přidat nabídku
           </Button>
         </Group>
@@ -330,6 +383,7 @@ export default function Page() {
         ) : (
           <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="lg">
             {filteredItems.map((item) => {
+              if (!item) return null;
               const isHovered = hoveredCardId === item.id;
               let badgeColor = "green";
               if (item.status === "Rezervováno") badgeColor = "orange";
@@ -388,6 +442,38 @@ export default function Page() {
         )}
       </Stack>
 
+      {/* MODÁLNÍ OKNO PRO PŘIHLÁŠENÍ */}
+      <Modal
+        opened={authModalOpened}
+        onClose={closeAuthModal}
+        title={
+          <Text fw={700} size="lg">
+            Přihlášení do aplikace
+          </Text>
+        }
+        centered
+        radius="md"
+        padding="xl"
+      >
+        <Stack gap="md" align="center" py="sm">
+          <Text size="sm" c="dimmed" ta="center">
+            Pro přidávání inzerátů a správu tvých nabídek se prosím přihlas pomocí Google účtu.
+          </Text>
+
+          <Button
+            onClick={handleGoogleSignIn}
+            size="md"
+            radius="md"
+            fullWidth
+            color="orange"
+            variant="filled"
+            leftSection={<LogIn size={18} />}
+          >
+            Pokračovat přes Google
+          </Button>
+        </Stack>
+      </Modal>
+
       {/* MODÁL DETAILU INZERÁTU */}
       <Modal
         opened={selectedItem !== null}
@@ -406,28 +492,34 @@ export default function Page() {
                   ← Zpět na seznam
                 </Button>
 
-                <Group gap="xs">
-                  <Button
-                    variant="filled"
-                    color="orange"
-                    radius="xl"
-                    size="sm"
-                    onClick={() => handleEditClick(selectedItem)}
-                  >
-                    ✏️ Upravit inzerát
-                  </Button>
+                {isOwner ? (
+                  <Group gap="xs">
+                    <Button
+                      variant="filled"
+                      color="orange"
+                      radius="xl"
+                      size="sm"
+                      onClick={() => handleEditClick(selectedItem)}
+                    >
+                      ✏️ Upravit inzerát
+                    </Button>
 
-                  <Button
-                    variant="filled"
-                    color="red"
-                    radius="xl"
-                    size="sm"
-                    loading={deleteLoading}
-                    onClick={() => handleDeleteClick(selectedItem.id)}
-                  >
-                    🗑️ Smazat inzerát
-                  </Button>
-                </Group>
+                    <Button
+                      variant="filled"
+                      color="red"
+                      radius="xl"
+                      size="sm"
+                      loading={deleteLoading}
+                      onClick={() => handleDeleteClick(selectedItem.id)}
+                    >
+                      🗑️ Smazat inzerát
+                    </Button>
+                  </Group>
+                ) : (
+                  <Text size="xs" c="dimmed">
+                    Pro úpravu musíte být autorem inzerátu
+                  </Text>
+                )}
               </Group>
             </Box>
 
@@ -507,59 +599,61 @@ export default function Page() {
                       Platbu a předání si domluvte přímo mezi sebou.
                     </Alert>
 
-                    <Group gap="md" mt="xl">
-                      {selectedItem.status === "Rezervováno" ? (
-                        <Button
-                          variant="outline"
-                          color="orange"
-                          size="md"
-                          radius="md"
-                          style={{ flex: 1 }}
-                          loading={statusLoading}
-                          onClick={() => handleStatusChange(selectedItem.id, "Dostupné")}
-                        >
-                          Zrušit rezervaci
-                        </Button>
-                      ) : (
-                        <Button
-                          color="orange"
-                          size="md"
-                          radius="md"
-                          style={{ flex: 1 }}
-                          loading={statusLoading}
-                          disabled={selectedItem.status === "Prodáno"}
-                          onClick={() => handleStatusChange(selectedItem.id, "Rezervováno")}
-                        >
-                          Rezervovat
-                        </Button>
-                      )}
+                    {isOwner && (
+                      <Group gap="md" mt="xl">
+                        {selectedItem.status === "Rezervováno" ? (
+                          <Button
+                            variant="outline"
+                            color="orange"
+                            size="md"
+                            radius="md"
+                            style={{ flex: 1 }}
+                            loading={statusLoading}
+                            onClick={() => handleStatusChange(selectedItem.id, "Dostupné")}
+                          >
+                            Zrušit rezervaci
+                          </Button>
+                        ) : (
+                          <Button
+                            color="orange"
+                            size="md"
+                            radius="md"
+                            style={{ flex: 1 }}
+                            loading={statusLoading}
+                            disabled={selectedItem.status === "Prodáno"}
+                            onClick={() => handleStatusChange(selectedItem.id, "Rezervováno")}
+                          >
+                            Rezervovat
+                          </Button>
+                        )}
 
-                      {selectedItem.status === "Prodáno" ? (
-                        <Button
-                          variant="outline"
-                          color="gray"
-                          size="md"
-                          radius="md"
-                          style={{ flex: 1 }}
-                          loading={statusLoading}
-                          onClick={() => handleStatusChange(selectedItem.id, "Dostupné")}
-                        >
-                          Vrátit do prodeje
-                        </Button>
-                      ) : (
-                        <Button
-                          variant="outline"
-                          color="red"
-                          size="md"
-                          radius="md"
-                          style={{ flex: 1 }}
-                          loading={statusLoading}
-                          onClick={() => handleStatusChange(selectedItem.id, "Prodáno")}
-                        >
-                          Označit jako prodáno
-                        </Button>
-                      )}
-                    </Group>
+                        {selectedItem.status === "Prodáno" ? (
+                          <Button
+                            variant="outline"
+                            color="gray"
+                            size="md"
+                            radius="md"
+                            style={{ flex: 1 }}
+                            loading={statusLoading}
+                            onClick={() => handleStatusChange(selectedItem.id, "Dostupné")}
+                          >
+                            Vrátit do prodeje
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            color="red"
+                            size="md"
+                            radius="md"
+                            style={{ flex: 1 }}
+                            loading={statusLoading}
+                            onClick={() => handleStatusChange(selectedItem.id, "Prodáno")}
+                          >
+                            Označit jako prodáno
+                          </Button>
+                        )}
+                      </Group>
+                    )}
                   </Stack>
                 </Card>
               </SimpleGrid>
@@ -602,6 +696,7 @@ export default function Page() {
             <Select
               label="Kategorie"
               name="category"
+              key={editingItem ? `edit-${editingItem.id}` : "create"}
               defaultValue={editingItem?.category || null}
               data={["ELEKTRONIKA", "DĚTSKÉ VĚCI", "KNIHY", "NÁBYTEK", "OSTATNÍ"]}
               required
@@ -627,6 +722,7 @@ export default function Page() {
                 onChange={(event) => handleIsFreeChange(event.currentTarget.checked)}
                 mb="xs"
                 color="orange"
+                radius="md"
               />
             </Group>
 
@@ -639,18 +735,15 @@ export default function Page() {
                 withAsterisk
                 radius="md"
               />
-              <TextInput
-                label="E-mail"
-                name="contactEmail"
-                defaultValue={editingItem?.contactEmail || ""}
-                type="email"
-                radius="md"
-              />
+
+              {/* ZASEDLÝ / ZAMČENÝ E-MAIL */}
+              <TextInput label="E-mail" value={formEmail} disabled type="email" radius="md" description="" />
             </SimpleGrid>
 
             <Select
               label="Stav nabídky"
               name="status"
+              key={editingItem ? `status-${editingItem.id}` : "status-create"}
               defaultValue={editingItem?.status || "Dostupné"}
               data={["Dostupné", "Rezervováno", "Prodáno"]}
               radius="md"
