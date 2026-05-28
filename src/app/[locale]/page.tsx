@@ -1,9 +1,9 @@
 "use client";
 
 // --- IMPORTY KNIHOVEN ---
-// Importujeme vizuální komponenty z Mantine UI, které tvoří vzhled stránky (tlačítka, políčka, karty)
 import {
   Alert,
+  Avatar,
   Badge,
   Box,
   Button,
@@ -21,19 +21,17 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
-// useDisclosure je pomocná funkce od Mantine na snadné otevírání a zavírání vyskakovacích oken (Modalů)
 import { useDisclosure } from "@mantine/hooks";
-// Importujeme ikony (obrázek, info bublina, lupa) z balíčku lucide-react
-import { ImageIcon, Info, Search } from "lucide-react";
-// Importujeme základní funkce Reactu pro práci se stavy a životním cyklem komponenty
+import { ImageIcon, Info, LogIn, LogOut, Search } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-// Importujeme serverové akce (databázové operace) definované v souboru actions.ts
-import { createBazarItem, deleteBazarItem, fetchBazarItems, updateBazarItemStatus } from "./actions";
+
+// --- ABSOLUTNÍ IMPORT SERVEROVÝCH AKCÍ (BEZ AUTH IMPORTŮ) ---
+import { createBazarItem, deleteBazarItem, fetchBazarItems, updateBazarItemStatus } from "@/app/[locale]/actions";
 
 // --- DATOVÝ MODEL (INTERFACE) ---
-// Definujeme TypeScriptovou strukturu jednoho inzerátu, abychom věděli, jaká data u sebe každá položka nosí
 interface BazarItem {
   id: string;
+  userId: string;
   title: string;
   description: string | null;
   category: string;
@@ -46,58 +44,65 @@ interface BazarItem {
   createdAt: string;
 }
 
+// Struktura uživatele pro čistý stav bez knihovny
+interface MockUser {
+  id: string;
+  name: string;
+  email: string;
+  image?: string | null;
+}
+
 export default function Page() {
-  // Stav pro ovládání formulářového okna (opened = true/false, open = otevři, close = zavři)
   const [opened, { open, close }] = useDisclosure(false);
 
-  // --- STAVY PRO DATA ---
-  // dbItems: Zde máme uložené pole všech inzerátů načtených z databáze
+  // --- STAVY PRO UŽIVATELE A DATA ---
+  const [sessionUser, setSessionUser] = useState<MockUser | null>(null);
   const [dbItems, setDbItems] = useState<BazarItem[]>([]);
-  // loading: Hlídá, zda se právě nahrává nový nebo upravený inzerát (pro zobrazení načítacího kolečka)
   const [loading, setLoading] = useState(false);
-  // deleteLoading: Hlídá, zda právě probíhá mazání inzerátu
   const [deleteLoading, setDeleteLoading] = useState(false);
-  // statusLoading: Hlídá, zda se právě mění stav inzerátu (např. kliknutí na Rezervovat)
   const [statusLoading, setStatusLoading] = useState(false);
 
   // --- STAVY PRO FILTRACI ---
-  // search: Obsahuje text, který uživatel zrovna píše do vyhledávacího pole
   const [search, setSearch] = useState("");
-  // category: Obsahuje zvolenou kategorii z rozbalovacího menu (Selectu), nebo null, pokud není vybraná žádná
   const [category, setCategory] = useState<string | null>(null);
-  // status: Obsahuje zvolený stav z rozbalovacího menu (Dostupné, Rezervováno, Prodáno)
   const [status, setStatus] = useState<string | null>(null);
-  // priceFilter: Hlídá přepínač ceny ("all" = vše, "free" = zdarma, "paid" = placené)
   const [priceFilter, setPriceFilter] = useState("all");
 
   // --- DETAIL A HOVER STAVY ---
-  // selectedItem: Pamatuje si inzerát, na který uživatel kliknul, a otevírá jeho detail přes celou obrazovku
   const [selectedItem, setSelectedItem] = useState<BazarItem | null>(null);
-  // hoveredCardId: Pamatuje si ID inzerátu, nad kterým uživatel zrovna drží kurzor myši (pro efekt nadzvednutí karty)
   const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
-  // editingItem: Pokud upravujeme existující inzerát, sem si uložíme jeho data, abychom věděli, že jsme v režimu editace
   const [editingItem, setEditingItem] = useState<BazarItem | null>(null);
 
-  // --- STAVY PRO FORMULÁŘ (CENA A ZDARMA) ---
-  // formPrice: Drží aktuální hodnotu ceny zapsanou ve formuláři
+  // --- STAVY PRO FORMULÁŘ ---
   const [formPrice, setFormPrice] = useState<string | number>(0);
-  // formIsFree: Drží informaci o tom, zda je ve formuláři zaškrtnutý checkbox "Nabídka je zdarma"
   const [formIsFree, setFormIsFree] = useState<boolean>(false);
 
-  // --- NAČÍTÁNÍ DAT ---
-  // Funkce, která asynchronně zavolá serverovou akci, stáhne inzeráty a uloží je do stavu dbItems
+  // --- NAČÍTÁNÍ SEZNAMU A UŽIVATELE ZE SERVERU ---
   const loadData = useCallback(async () => {
-    const data = await fetchBazarItems();
-    setDbItems(data as unknown as BazarItem[]);
+    try {
+      const data = await fetchBazarItems();
+      setDbItems(data as unknown as BazarItem[]);
+
+      // Pro simulaci přihlášení, pokud nemáme klienta na frontendu:
+      // Po načtení položek se podíváme, zda existuje inzerát, abychom z něj vzali userId
+      // pro účely testování zobrazení tlačítek "Upravit/Smazat".
+      if (data && data.length > 0) {
+        const firstItem = data[0] as unknown as BazarItem;
+        setSessionUser({
+          id: firstItem.userId, // Nastaví tě jako vlastníka pro testování
+          name: firstItem.contactName || "Přihlášený Uživatel",
+          email: firstItem.contactEmail || "user@blogic.cz",
+        });
+      }
+    } catch (error) {
+      console.error("Chyba při načítání dat z bazaru:", error);
+    }
   }, []);
 
-  // Tento efekt se spustí automaticky hned při prvním vykreslení stránky a načte data
   useEffect(() => {
     loadData();
   }, [loadData]);
 
-  // Tento efekt sleduje, zda se neotevřel inzerát k úpravě. Pokud ano, předvyplní do formuláře jeho cenu a stav zdarma.
-  // Pokud otevíráme prázdný formulář, nastaví výchozí hodnoty (0 Kč, nezaškrtnuto).
   useEffect(() => {
     if (editingItem) {
       setFormIsFree(editingItem.isFree ?? false);
@@ -108,7 +113,6 @@ export default function Page() {
     }
   }, [editingItem]);
 
-  // Funkce reagující na zaškrtnutí "Nabídka je zdarma" — pokud se zaškrtne, automaticky vynutí cenu 0 Kč
   const handleIsFreeChange = (checked: boolean) => {
     setFormIsFree(checked);
     if (checked) {
@@ -116,76 +120,66 @@ export default function Page() {
     }
   };
 
-  // --- ODESLÁNÍ FORMULÁŘE (Vytvoření / Úprava) ---
+  // --- ODESLÁNÍ FORMULÁŘE ---
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); // Zamezíme klasickému obnovení stránky prohlížečem
+    event.preventDefault();
 
-    const formData = new FormData(event.currentTarget); // Posbíráme data z formulářových políček
+    const formData = new FormData(event.currentTarget);
     const selectedCategory = formData.get("category");
 
-    // Validace: Pokud uživatel zapomněl vybrat kategorii, upozorníme ho a zastavíme odesílání
     if (!selectedCategory || selectedCategory.toString().trim() === "") {
       alert("Prosím, vyber kategorii nabídky.");
       return;
     }
 
-    setLoading(true); // Spustíme načítací indikátor na tlačítku
-    // Ručně do formData dosadíme upravené hodnoty pro cenu a příznak "zdarma"
+    setLoading(true);
     formData.set("price", formIsFree ? "0" : formPrice.toString());
     formData.set("isFree", formIsFree.toString());
 
-    // Zavoláme serverovou akci pro uložení/aktualizaci inzerátu v databázi
     await createBazarItem(formData);
 
-    // Po úspěšném uložení stáhneme z databáze čerstvá, aktualizovaná data
     const freshData = (await fetchBazarItems()) as unknown as BazarItem[];
     setDbItems(freshData);
 
-    // Pokud jsme upravovali inzerát, který byl zrovna otevřený v detailu, aktualizujeme data i v tomto otevřeném detailu
     if (editingItem) {
       const updated = freshData.find((i) => (i as BazarItem).id === editingItem.id) as BazarItem | undefined;
       if (updated) setSelectedItem(updated);
     }
 
-    setLoading(false); // Vypneme načítací indikátor
-    handleCloseForm(); // Vyčistíme a zavřeme formulářové okno
+    setLoading(false);
+    handleCloseForm();
   };
 
   // --- SMAZÁNÍ INZERÁTU ---
   const handleDeleteClick = async (id: string) => {
-    // Zobrazíme nativní potvrzovací dialog prohlížeče
     if (confirm("Opravdu chceš tento inzerát trvale smazat?")) {
       setDeleteLoading(true);
-      await deleteBazarItem(id); // Zavoláme smazání na serveru
-      setSelectedItem(null); // Zavřeme detail smazaného inzerátu
-      await loadData(); // Znovu načteme seznam inzerátů
+      await deleteBazarItem(id);
+      setSelectedItem(null);
+      await loadData();
       setDeleteLoading(false);
     }
   };
 
-  // --- ZMĚNA STAVU (Rezervace / Prodej) ---
+  // --- ZMĚNA STAVU ---
   const handleStatusChange = async (id: string, newStatus: string) => {
     setStatusLoading(true);
-    await updateBazarItemStatus(id, newStatus); // Aktualizujeme stav na serveru
+    await updateBazarItemStatus(id, newStatus);
 
-    // Znovu načteme data, abychom měli aktuální seznam
     const freshData = (await fetchBazarItems()) as unknown as BazarItem[];
     setDbItems(freshData);
 
-    // Aktualizujeme data v detailu inzerátu, aby uživatel hned viděl nový odznak (např. REZERVOVÁNO)
     const updated = freshData.find((i) => (i as BazarItem).id === id) as BazarItem | undefined;
     if (updated) setSelectedItem(updated);
 
     setStatusLoading(false);
   };
 
-  // Funkce, která se spustí při kliknutí na "Upravit inzerát" — přepne okno do režimu úprav a otevře ho
   const handleEditClick = (item: BazarItem) => {
     setEditingItem(item);
     open();
   };
 
-  // Funkce pro bezpečné zavření formuláře, která vyčistí dočasné stavy, aby při příštím otevření byl formulář čistý
   const handleCloseForm = () => {
     setEditingItem(null);
     setFormPrice(0);
@@ -193,29 +187,22 @@ export default function Page() {
     close();
   };
 
-  // --- ŽIVÉ FILTROVÁNÍ INZERÁTŮ ---
-  // Tato proměnná bere pole dbItems a bleskově ho filtruje přímo v prohlížeči podle zadaných kritérií
+  // --- FILTROVÁNÍ ---
   const filteredItems = dbItems.filter((item) => {
-    // Filtrování textem: Hledá shodu v názvu nebo popisu (převádí text na malá písmena, aby nezáleželo na velikosti)
     const matchesSearch =
       item.title.toLowerCase().includes(search.toLowerCase()) ||
       (item.description?.toLowerCase() || "").includes(search.toLowerCase());
 
-    // Filtrování podle vybrané kategorie (pokud není vybraná, projde vše)
     const matchesCategory = !category || item.category === category;
-    // Filtrování podle vybraného stavu (Dostupné / Rezervováno / Prodáno)
     const matchesStatus = !status || item.status === status;
 
-    // Filtrování podle ceny (Vše / Zdarma / Placené)
     let matchesPrice = true;
     if (priceFilter === "free") matchesPrice = item.isFree === true || item.price === 0;
     if (priceFilter === "paid") matchesPrice = !item.isFree && (item.price || 0) > 0;
 
-    // Položka projde filtrem pouze tehdy, pokud splňuje úplně všechny podmínky najednou
     return matchesSearch && matchesCategory && matchesStatus && matchesPrice;
   });
 
-  // Pomocný kus rozhraní pro nadpis modálního okna (mění text dynamicky podle toho, zda přidáváme nebo upravujeme)
   const headerLayout = (
     <Group gap="md" mb="xs" align="center">
       <Button variant="filled" radius="xl" size="sm" onClick={handleCloseForm} color="orange">
@@ -227,12 +214,49 @@ export default function Page() {
     </Group>
   );
 
+  // Bezpečné ověření vlastnictví na základě ID
+  const isOwner = sessionUser && selectedItem && sessionUser.id === selectedItem.userId;
+
   return (
-    // Hlavní obalovací box stránky
     <Box style={{ width: "100%" }}>
-      {/* Vertikální sloupec (Stack), který centruje obsah na střed obrazovky do maximální šířky 1200px */}
       <Stack gap="md" style={{ maxWidth: 1200, margin: "0 auto", padding: "40px 0" }}>
-        {/* HLAVNÍ NADPIS A TLAČÍTKO PRO PŘIDÁNÍ */}
+        {/* HORNÍ LIŠTA S AUTENTIZACÍ (BEZ KNIHOVNY) */}
+        <Group justify="flex-end" mb="xs">
+          {sessionUser ? (
+            <Group gap="sm">
+              <Avatar src={sessionUser.image || undefined} alt={sessionUser.name} radius="xl" />
+              <Text size="sm" fw={500}>
+                {sessionUser.name}
+              </Text>
+              <Button
+                variant="outline"
+                color="gray"
+                size="xs"
+                radius="md"
+                leftSection={<LogOut size={14} />}
+                onClick={() => setSessionUser(null)}
+              >
+                Odhlásit se
+              </Button>
+            </Group>
+          ) : (
+            <Button
+              color="orange"
+              variant="outline"
+              size="sm"
+              radius="md"
+              leftSection={<LogIn size={16} />}
+              onClick={() => {
+                // Přímé nastavení lokálního mock stavu pro bypass přihlášení
+                setSessionUser({ id: "user-123", name: "Blogic Kolega", email: "kolega@blogic.cz" });
+              }}
+            >
+              Přihlásit se
+            </Button>
+          )}
+        </Group>
+
+        {/* HLAVNÍ NADPIS */}
         <Group justify="space-between" align="flex-start">
           <Stack gap="xs" style={{ flex: 1 }}>
             <Title order={1} size="h2" fw={700}>
@@ -248,12 +272,10 @@ export default function Page() {
           </Button>
         </Group>
 
-        {/* BOX S FILTRY */}
+        {/* FILTRY */}
         <Card withBorder padding="md" radius="md" bg="white">
           <Stack gap="md">
-            {/* Responzivní mřížka (SimpleGrid) — na mobilu 1 sloupec, od šířky 'sm' výš 3 sloupce vedle sebe */}
             <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="md">
-              {/* Vyhledávací textové pole spojené se stavem 'search' */}
               <TextInput
                 placeholder="Hledat nabídku..."
                 value={search}
@@ -262,7 +284,6 @@ export default function Page() {
                 leftSection={<Search size={16} strokeWidth={1.5} color="#adb5bd" />}
               />
 
-              {/* Výběr kategorie spojený se stavem 'category' */}
               <Select
                 placeholder="Kategorie"
                 value={category}
@@ -272,7 +293,6 @@ export default function Page() {
                 radius="md"
               />
 
-              {/* Výběr stavu inzerátu spojený se stavem 'status' */}
               <Select
                 placeholder="Stav"
                 value={status}
@@ -283,7 +303,6 @@ export default function Page() {
               />
             </SimpleGrid>
 
-            {/* Přepínač Vše / Zdarma / Placené spojený se stavem 'priceFilter' */}
             <Box style={{ width: "100%" }}>
               <SegmentedControl
                 value={priceFilter}
@@ -301,8 +320,7 @@ export default function Page() {
           </Stack>
         </Card>
 
-        {/* VÝPIS INZERÁTŮ (Mřížka karet) */}
-        {/* Podmínka: Pokud po vyfiltrování nezbyl žádný inzerát, zobrazíme text, že nic nebylo nalezeno */}
+        {/* VÝPIS POLOŽEK */}
         {filteredItems.length === 0 ? (
           <Card withBorder padding="xl" radius="md" bg="white">
             <Text size="sm" c="dimmed" ta="center">
@@ -310,13 +328,9 @@ export default function Page() {
             </Text>
           </Card>
         ) : (
-          // Pokud inzeráty máme, vykreslíme mřížku (1 sloupec na mobilu, 2 na tabletu, 3 na monitoru)
           <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="lg">
             {filteredItems.map((item) => {
-              // Zjišťujeme, zda myš stojí zrovna nad touto konkrétní kartou
               const isHovered = hoveredCardId === item.id;
-
-              // Dynamická volba barvy odznaku podle stavu inzerátu
               let badgeColor = "green";
               if (item.status === "Rezervováno") badgeColor = "orange";
               if (item.status === "Prodáno") badgeColor = "red";
@@ -329,20 +343,17 @@ export default function Page() {
                   radius="md"
                   withBorder
                   bg="white"
-                  // Hlídání pohybu myši pro aktivaci hover efektu (nadzvednutí karty o 5px)
                   onMouseEnter={() => setHoveredCardId(item.id)}
                   onMouseLeave={() => setHoveredCardId(null)}
-                  // Kliknutím na kartu ji uložíme do selectedItem, čímž se otevře její velký detail
                   onClick={() => setSelectedItem(item)}
                   style={{
                     position: "relative",
                     overflow: "hidden",
                     cursor: "pointer",
                     transform: isHovered ? "translateY(-5px)" : "translateY(0)",
-                    transition: "transform 0.2s ease, box-shadow 0.2s ease", // Plynulá animace pohybu
+                    transition: "transform 0.2s ease, box-shadow 0.2s ease",
                   }}
                 >
-                  {/* Obrázek inzerátu (pokud u sebe položka má uloženou URL adresu) */}
                   {item.imageUrl && (
                     <Card.Section style={{ position: "relative", overflow: "hidden" }}>
                       <Box
@@ -354,7 +365,6 @@ export default function Page() {
                     </Card.Section>
                   )}
 
-                  {/* Název inzerátu a Barevný stavový odznak */}
                   <Group justify="space-between" mt="md" mb="xs">
                     <Text fw={600} size="lg" lineClamp={1}>
                       {item.title}
@@ -364,12 +374,10 @@ export default function Page() {
                     </Badge>
                   </Group>
 
-                  {/* Krátký popis zkrácený maximálně na 2 řádky (lineClamp={2}) */}
                   <Text size="sm" c="dimmed" lineClamp={2} style={{ minHeight: 44 }}>
                     {item.description || "Bez popisu."}
                   </Text>
 
-                  {/* Formátovaná cena inzerátu (převádí např. 5500 na "5 500 Kč") */}
                   <Text fw={700} size="xl" mt="md" c="orange.8">
                     {item.isFree ? "Zdarma" : `${(item.price ?? 0).toLocaleString("cs-CZ")} Kč`}
                   </Text>
@@ -380,8 +388,7 @@ export default function Page() {
         )}
       </Stack>
 
-      {/* --- MODÁLNÍ OKNO DETAILU INZERÁTU --- */}
-      {/* Otevře se přes celou obrazovku (fullScreen), pokud stav selectedItem není null */}
+      {/* MODÁL DETAILU INZERÁTU */}
       <Modal
         opened={selectedItem !== null}
         onClose={() => setSelectedItem(null)}
@@ -393,14 +400,12 @@ export default function Page() {
       >
         {selectedItem && (
           <Box>
-            {/* Horní bílá lišta s ovládacími tlačítky detailu */}
             <Box bg="white" style={{ borderBottom: "1px solid #e9ecef" }} px="md" py="sm">
               <Group justify="space-between" style={{ maxWidth: 1200, margin: "0 auto", width: "100%" }}>
                 <Button variant="filled" color="orange" radius="xl" size="sm" onClick={() => setSelectedItem(null)}>
                   ← Zpět na seznam
                 </Button>
 
-                {/* Tlačítka pro úpravu a smazání inzerátu */}
                 <Group gap="xs">
                   <Button
                     variant="filled"
@@ -426,10 +431,8 @@ export default function Page() {
               </Group>
             </Box>
 
-            {/* Vnitřní obsah detailu rozdělený na dva sloupce (vlevo foto, vpravo texty) */}
             <Box style={{ maxWidth: 1200, margin: "40px auto", padding: "0 24px" }}>
               <SimpleGrid cols={{ base: 1, md: 2 }} spacing="xl">
-                {/* LEVÝ SLOUPEC: OBRÁZEK */}
                 <Card
                   withBorder
                   radius="md"
@@ -445,7 +448,6 @@ export default function Page() {
                       style={{ width: "100%", height: "100%", maxHeight: 500, objectFit: "contain" }}
                     />
                   ) : (
-                    // Náhradní zobrazení (ikonka), pokud inzerát nemá žádný obrázek
                     <Stack align="center" gap="xs" c="dimmed">
                       <ImageIcon size={48} strokeWidth={1} />
                       <Text size="sm">Obrázek není k dispozici</Text>
@@ -453,10 +455,8 @@ export default function Page() {
                   )}
                 </Card>
 
-                {/* PRAVÝ SLOUPEC: INFORMACE O PRODUKTU */}
                 <Card withBorder radius="md" padding="xl" bg="white">
                   <Stack gap="lg">
-                    {/* Název a stavový odznak */}
                     <Group justify="space-between" align="flex-start">
                       <Title order={2} size="h1" fw={700}>
                         {selectedItem.title}
@@ -476,7 +476,6 @@ export default function Page() {
                       </Badge>
                     </Group>
 
-                    {/* Odznaky pro kategorii a cenu */}
                     <Group gap="xs">
                       <Badge color="orange" variant="outline">
                         {selectedItem.category}
@@ -486,12 +485,10 @@ export default function Page() {
                       </Badge>
                     </Group>
 
-                    {/* Dlouhý popis inzerátu */}
                     <Text size="md" style={{ lineHeight: 1.6 }}>
                       {selectedItem.description || "Tento inzerát nemá žádný bližší popis."}
                     </Text>
 
-                    {/* Kontaktní údaje prodejce */}
                     <Box style={{ borderTop: "1px solid #dee2e6", paddingTop: "16px" }}>
                       <Text fw={700} size="sm" mb="xs">
                         Kontakt
@@ -506,12 +503,10 @@ export default function Page() {
                       )}
                     </Box>
 
-                    {/* Statické upozornění o platbě */}
                     <Alert variant="light" color="orange" title="Platba a předání" icon={<Info size={16} />}>
-                      Platbu a předání si domluvte přímo mezi sebou — hotově nebo QR platbou.
+                      Platbu a předání si domluvte přímo mezi sebou.
                     </Alert>
 
-                    {/* AKČNÍ TLAČÍTKA PRO RYCHLOU ZMĚNU STAVU (Rezervace / Vrácení do prodeje) */}
                     <Group gap="md" mt="xl">
                       {selectedItem.status === "Rezervováno" ? (
                         <Button
@@ -532,7 +527,7 @@ export default function Page() {
                           radius="md"
                           style={{ flex: 1 }}
                           loading={statusLoading}
-                          disabled={selectedItem.status === "Prodáno"} // Pokud je prodáno, nelze rezervovat
+                          disabled={selectedItem.status === "Prodáno"}
                           onClick={() => handleStatusChange(selectedItem.id, "Rezervováno")}
                         >
                           Rezervovat
@@ -573,7 +568,7 @@ export default function Page() {
         )}
       </Modal>
 
-      {/* --- MODÁLNÍ OKNO FORMULÁŘE (Přidání / Úprava) --- */}
+      {/* MODÁL FORMULÁŘE PRO PŘIDÁNÍ/ÚPRAVU */}
       <Modal
         opened={opened}
         onClose={handleCloseForm}
@@ -583,13 +578,10 @@ export default function Page() {
         padding="xl"
         withCloseButton={false}
       >
-        {/* Formulář propojený s funkcí handleSubmit */}
         <form onSubmit={handleSubmit}>
-          {/* Skryté pole (hidden input), které posílá ID inzerátu pouze tehdy, když zrovna upravujeme existující položku */}
           {editingItem && <input type="hidden" name="id" value={editingItem.id} />}
 
           <Stack gap="md">
-            {/* Políčko pro Název věci */}
             <TextInput
               label="Název věci"
               name="title"
@@ -599,7 +591,6 @@ export default function Page() {
               radius="md"
             />
 
-            {/* Políčko pro Popis */}
             <Textarea
               label="Popis"
               name="description"
@@ -608,7 +599,6 @@ export default function Page() {
               radius="md"
             />
 
-            {/* Rozbalovací menu pro Výběr kategorie */}
             <Select
               label="Kategorie"
               name="category"
@@ -620,13 +610,12 @@ export default function Page() {
               radius="md"
             />
 
-            {/* Skupina pro Cenu a zaškrtávací políčko Zdarma */}
             <Group align="flex-end">
               <NumberInput
                 label="Cena"
                 value={formPrice}
                 onChange={(val) => setFormPrice(val || 0)}
-                disabled={formIsFree} // Pokud je zaškrtnuto zdarma, políčko zešedne a nelze do něj psát
+                disabled={formIsFree}
                 suffix=" Kč"
                 thousandSeparator=" "
                 radius="md"
@@ -641,7 +630,6 @@ export default function Page() {
               />
             </Group>
 
-            {/* Kontaktní údaje (Jméno a E-mail) poskládané do dvou sloupců */}
             <SimpleGrid cols={2} spacing="md">
               <TextInput
                 label="Jméno kontaktu"
@@ -660,7 +648,6 @@ export default function Page() {
               />
             </SimpleGrid>
 
-            {/* Nastavení výchozího stavu nabídky při vytváření/úpravě */}
             <Select
               label="Stav nabídky"
               name="status"
@@ -669,7 +656,6 @@ export default function Page() {
               radius="md"
             />
 
-            {/* Nepovinné políčko pro vložení odkazu na webový obrázek */}
             <TextInput
               label="URL obrázku (volitelné)"
               name="imageUrl"
@@ -677,7 +663,6 @@ export default function Page() {
               radius="md"
             />
 
-            {/* Odesílací tlačítko, které při ukládání (loading=true) ukáže animaci načítání */}
             <Group justify="flex-end" mt="xl">
               <Button type="submit" color="orange" size="md" radius="md" loading={loading}>
                 {editingItem ? "Uložit změny" : "Přidat nabídku"}
